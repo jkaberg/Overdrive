@@ -16,20 +16,25 @@ import android.view.animation.PathInterpolator
 import java.io.File
 
 /**
- * SOTA single-camera zoom over the AVM 2x2 mosaic.
+ * SOTA single-camera zoom over the AVM recording mosaic.
  *
  * The recordings are written by [com.overdrive.app.surveillance.GpuMosaicRecorder]
- * as a single MP4 containing a 2x2 grid of the four AVM cameras:
+ * as a single MP4. Two compositions exist (see [Layout]):
  *
- *     Front (TL) | Right (TR)
- *     -----------+-----------
- *      Rear (BL) | Left  (BR)
+ *   STANDARD — a 2x2 grid of the four AVM cameras:
+ *       Front (TL) | Right (TR)
+ *       -----------+-----------
+ *        Rear (BL) | Left  (BR)
+ *
+ *   DASHCAM — the front camera across the top band, with the
+ *       left / rear / right cameras tiled across the bottom band in thirds.
  *
  * There is no per-camera stream on disk. To play "just the front camera in
- * fullscreen" we keep the same MP4 and apply a TextureView matrix that
- * scales 2x around the relevant quadrant corner — the user sees a single
- * camera at native source resolution (1280×960 Seal / 1280×720 Tang) with
- * zero re-encode, full audio, working scrub.
+ * fullscreen" we keep the same MP4 and apply a TextureView matrix that maps
+ * the chosen camera's sub-rectangle of the frame to fill the view — the user
+ * sees a single camera at native source resolution (1280×960 Seal / 1280×720
+ * Tang) with zero re-encode, full audio, working scrub. Which sub-rectangle a
+ * [Quadrant] denotes depends on the clip's [Layout].
  *
  * Why TextureView (not VideoView): VideoView wraps SurfaceView whose
  * compositor-blitted surface ignores View transforms. TextureView routes
@@ -59,11 +64,26 @@ class ZoomableVideoView @JvmOverloads constructor(
      * shared logs), normalize at the boundary.
      */
     enum class Quadrant {
-        ALL,        // No zoom — full mosaic
-        FRONT,      // Top-left
-        RIGHT,      // Top-right
-        REAR,       // Bottom-left
-        LEFT        // Bottom-right
+        ALL,        // No zoom — full frame
+        FRONT,      // STANDARD: top-left   · DASHCAM: top band (full width)
+        RIGHT,      // STANDARD: top-right  · DASHCAM: bottom-right third
+        REAR,       // STANDARD: bottom-left· DASHCAM: bottom-middle third
+        LEFT        // STANDARD: bottom-right·DASHCAM: bottom-left third
+    }
+
+    /**
+     * Composition of the recorded MP4 — determines where each camera lives in
+     * the frame, and therefore which sub-rectangle a [Quadrant] maps to. Must
+     * mirror GpuMosaicRecorder's shader:
+     *   STANDARD — 2x2 grid (Front TL, Right TR, Rear BL, Left BR).
+     *   DASHCAM  — front across the top [DASHCAM_SPLIT] band; left/rear/right
+     *              tiled across the bottom band in thirds.
+     * Set per clip from the recording's sidecar `layout` tag; defaults to
+     * STANDARD for legacy clips that pre-date the tag.
+     */
+    enum class Layout {
+        STANDARD,
+        DASHCAM
     }
 
     private var mediaPlayer: MediaPlayer? = null
@@ -107,6 +127,8 @@ class ZoomableVideoView @JvmOverloads constructor(
     private var videoHeight: Int = 0
 
     private var quadrant: Quadrant = Quadrant.ALL
+    // Composition of the current clip; drives regionFor() + quadrantAtPoint().
+    private var layout: Layout = Layout.STANDARD
     private var transformAnimator: ValueAnimator? = null
 
     // Tracks whether the producer has queued at least one frame to the
@@ -197,21 +219,40 @@ class ZoomableVideoView @JvmOverloads constructor(
 
     /**
      * Map a view-local touch point to a [Quadrant]. When already zoomed,
-     * double-tap is "reset to ALL". When zoomed out the texture fills
-     * the entire view edge-to-edge so a clean halves split is correct.
+     * double-tap is "reset to ALL". When zoomed out the texture fills the
+     * entire view edge-to-edge, so the hit-test mirrors the on-screen camera
+     * regions for the active [layout]:
+     *   STANDARD — a 2x2 halves split.
+     *   DASHCAM  — top [DASHCAM_SPLIT] band → FRONT; bottom band split into
+     *              left/middle/right thirds → LEFT / REAR / RIGHT.
      */
     private fun quadrantAtPoint(x: Float, y: Float): Quadrant {
         if (quadrant != Quadrant.ALL) return Quadrant.ALL
         val vw = width.toFloat()
         val vh = height.toFloat()
         if (vw <= 0f || vh <= 0f) return Quadrant.ALL
-        val left = x < vw / 2f
-        val top = y < vh / 2f
-        return when {
-            top && left -> Quadrant.FRONT
-            top && !left -> Quadrant.RIGHT
-            !top && left -> Quadrant.REAR
-            else -> Quadrant.LEFT
+        return when (layout) {
+            Layout.DASHCAM ->
+                if (y < DASHCAM_SPLIT * vh) {
+                    Quadrant.FRONT
+                } else {
+                    val fx = if (vw > 0f) x / vw else 0f
+                    when {
+                        fx < DASHCAM_THIRD -> Quadrant.LEFT
+                        fx < 2f * DASHCAM_THIRD -> Quadrant.REAR
+                        else -> Quadrant.RIGHT
+                    }
+                }
+            Layout.STANDARD -> {
+                val left = x < vw / 2f
+                val top = y < vh / 2f
+                when {
+                    top && left -> Quadrant.FRONT
+                    top && !left -> Quadrant.RIGHT
+                    !top && left -> Quadrant.REAR
+                    else -> Quadrant.LEFT
+                }
+            }
         }
     }
 
@@ -384,6 +425,26 @@ class ZoomableVideoView @JvmOverloads constructor(
 
     fun getQuadrant(): Quadrant = quadrant
 
+    /**
+     * Set the clip's composition [Layout]. Changes which sub-rectangle each
+     * [Quadrant] maps to (e.g. FRONT is the top-left quarter in STANDARD but
+     * the full-width top band in DASHCAM), so the host calls this per clip
+     * (from the recording's sidecar `layout` tag) before/around [setVideoURI].
+     *
+     * Pre-first-frame it just updates the field — the first paint reads it, so
+     * no flash. Mid-clip it snaps the current quadrant to the new geometry.
+     */
+    fun setLayout(newLayout: Layout) {
+        if (newLayout == layout) return
+        layout = newLayout
+        if (firstFrameSeen && width > 0 && height > 0) {
+            transformAnimator?.cancel()
+            applyTransform(progress = 1f, from = quadrant, to = quadrant)
+        }
+    }
+
+    fun getLayout(): Layout = layout
+
     // --------- Internals ---------
 
     private fun startPreparing() {
@@ -495,61 +556,74 @@ class ZoomableVideoView @JvmOverloads constructor(
     /**
      * Compose the active matrix for this frame.
      *
-     * Edge-to-edge fill — exact events.html parity (object-fit: fill on
-     * the wrapper, transform-origin at view corners):
+     * Region-based edge-to-edge fill — events.html parity (object-fit: fill).
+     * Each [Quadrant] maps, for the active [layout], to a normalized
+     * sub-rectangle of the source frame ([regionFor]); the matrix scales +
+     * translates that rectangle to fill the whole view, edge to edge, with no
+     * black bars. ALL → the full frame → identity matrix.
      *
-     *   - ALL view: identity matrix. The TextureView's producer fills
-     *     the view bounds by default; aspect mismatch between view and
-     *     source is absorbed as a slight stretch (same as events.html
-     *     when the wrapper aspect doesn't perfectly match the source —
-     *     and it always slightly doesn't due to host chrome rounding).
-     *   - Quadrant zoom: postScale(2, 2) around the VIEW's corner —
-     *     pivots (0,0), (W,0), (0,H), (W,H). The corner stays anchored,
-     *     the opposite half slides off-screen, and the visible quadrant
-     *     fills the entire view edge-to-edge with no black bars.
+     * For the STANDARD 2x2 regions this is identical to the previous
+     * postScale(2, 2)-around-a-view-corner formulation (e.g. FRONT = the
+     * (0,0,½,½) rect → scale 2 anchored top-left). DASHCAM uses the front
+     * top-band and the bottom-thirds rects instead.
      *
-     * No fit-center base layer: that adds parent-letterbox bands on
-     * the off-axis (which is the visible black gap the user called out
-     * as "not occupying all the space"). The trade-off is a small
-     * horizontal stretch on aspect-mismatched views — acceptable, and
-     * matches events.html's CSS-fill behavior.
-     *
-     * Quadrant transitions interpolate scale + pivot together over
-     * [progress] (Material 3 emphasized decelerate, set by the animator).
+     * Transitions interpolate the source rectangle (x, y, w, h) over
+     * [progress] (Material 3 emphasized decelerate, set by the animator), so
+     * scale and offset move together. A small stretch is accepted on
+     * aspect-mismatched views — same trade-off as events.html's CSS fill.
      */
     private fun applyTransform(progress: Float, from: Quadrant, to: Quadrant) {
         val vw = width.toFloat()
         val vh = height.toFloat()
         if (vw <= 0f || vh <= 0f) return
 
-        // View-corner pivots — same convention as events.html
-        // (.zoom-front → 0% 0%, .zoom-right → 100% 0%, etc).
-        val (px0, py0) = pivotFor(from, vw, vh)
-        val (px1, py1) = pivotFor(to, vw, vh)
-        val s0 = if (from == Quadrant.ALL) 1f else 2f
-        val s1 = if (to == Quadrant.ALL) 1f else 2f
-        val scale = s0 + (s1 - s0) * progress
-        val px = px0 + (px1 - px0) * progress
-        val py = py0 + (py1 - py0) * progress
+        val r0 = regionFor(layout, from)
+        val r1 = regionFor(layout, to)
+        val rx = r0.x + (r1.x - r0.x) * progress
+        val ry = r0.y + (r1.y - r0.y) * progress
+        val rw = r0.w + (r1.w - r0.w) * progress
+        val rh = r0.h + (r1.h - r0.h) * progress
+
+        // Fill the view with the [rx,ry,rw,rh] sub-rectangle: scale so the
+        // rect spans the whole view, then slide its top-left to the origin.
+        val sx = if (rw > 0f) 1f / rw else 1f
+        val sy = if (rh > 0f) 1f / rh else 1f
 
         val matrix = scratchMatrix
-        matrix.reset()
-        if (scale != 1f) matrix.postScale(scale, scale, px, py)
+        matrix.setScale(sx, sy)
+        matrix.postTranslate(-rx * vw * sx, -ry * vh * sy)
         setTransform(matrix)
         invalidate()
     }
 
+    /** Normalized sub-rectangle (x, y, w, h ∈ 0..1) of the source frame. */
+    private class Region(val x: Float, val y: Float, val w: Float, val h: Float)
+
     /**
-     * Corner pivot for a quadrant in VIEW-local coords.
-     * ALL = view center, FRONT = top-left, RIGHT = top-right,
-     * REAR = bottom-left, LEFT = bottom-right.
+     * The source-frame sub-rectangle a [Quadrant] occupies for a given
+     * [layout]. Mirrors GpuMosaicRecorder's shader composition exactly so
+     * the zoom lands on the right camera:
+     *   STANDARD — four quarters of the 2x2 grid.
+     *   DASHCAM  — FRONT = the full-width top [DASHCAM_SPLIT] band; LEFT /
+     *              REAR / RIGHT = the left / middle / right thirds of the
+     *              bottom band.
+     * ALL = the whole frame (identity zoom) in both layouts.
      */
-    private fun pivotFor(q: Quadrant, vw: Float, vh: Float): Pair<Float, Float> = when (q) {
-        Quadrant.ALL -> vw / 2f to vh / 2f
-        Quadrant.FRONT -> 0f to 0f
-        Quadrant.RIGHT -> vw to 0f
-        Quadrant.REAR -> 0f to vh
-        Quadrant.LEFT -> vw to vh
+    private fun regionFor(layout: Layout, q: Quadrant): Region = when (layout) {
+        Layout.STANDARD -> when (q) {
+            Quadrant.ALL -> Region(0f, 0f, 1f, 1f)
+            Quadrant.FRONT -> Region(0f, 0f, 0.5f, 0.5f)
+            Quadrant.RIGHT -> Region(0.5f, 0f, 0.5f, 0.5f)
+            Quadrant.REAR -> Region(0f, 0.5f, 0.5f, 0.5f)
+            Quadrant.LEFT -> Region(0.5f, 0.5f, 0.5f, 0.5f)
+        }
+        Layout.DASHCAM -> when (q) {
+            Quadrant.ALL -> Region(0f, 0f, 1f, 1f)
+            Quadrant.FRONT -> Region(0f, 0f, 1f, DASHCAM_SPLIT)
+            Quadrant.LEFT -> Region(0f, DASHCAM_SPLIT, DASHCAM_THIRD, DASHCAM_BOTTOM)
+            Quadrant.REAR -> Region(DASHCAM_THIRD, DASHCAM_SPLIT, DASHCAM_THIRD, DASHCAM_BOTTOM)
+            Quadrant.RIGHT -> Region(2f * DASHCAM_THIRD, DASHCAM_SPLIT, DASHCAM_THIRD, DASHCAM_BOTTOM)
+        }
     }
 
     /*
@@ -671,5 +745,12 @@ class ZoomableVideoView @JvmOverloads constructor(
         // Material 3 emphasized decelerate curve.
         private val MATERIAL_EMPHASIZED_DECELERATE =
             PathInterpolator(0.05f, 0.7f, 0.1f, 1.0f)
+
+        // Dashcam composition geometry — MUST match GpuMosaicRecorder's
+        // dashcam shader branch: the front slice fills the top SPLIT band
+        // (full width); left/rear/right tile the bottom band in thirds.
+        private const val DASHCAM_SPLIT = 0.70f
+        private const val DASHCAM_BOTTOM = 0.30f   // 1 - DASHCAM_SPLIT
+        private const val DASHCAM_THIRD = 1f / 3f
     }
 }

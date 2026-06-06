@@ -93,6 +93,10 @@ public class GpuMosaicRecorder {
     private int uRectifyK2Location;
     private int uRectifyAspectLocation;
     private int uRecordLayoutLocation;
+    // Optional dedicated windshield camera (dashcam top band). uWindshieldTex
+    // is bound to GL_TEXTURE2 in drawFrame; uWindshieldReady gates its use.
+    private int uWindshieldTexLocation;
+    private int uWindshieldReadyLocation;
     private int aPositionLocation;
     private int aTexCoordLocation;
 
@@ -313,6 +317,13 @@ public class GpuMosaicRecorder {
     };
     private static final int DEFAULT_VIEWPORT_WIDTH = 2560;
     private static final int DEFAULT_VIEWPORT_HEIGHT = 1920;
+    // Dashcam composition: fraction of the output height the forward view
+    // occupies (top band). MUST match the shader's `float split` and the
+    // players' DASHCAM_SPLIT.
+    private static final float DASHCAM_SPLIT = 0.70f;
+    // Dedicated windshield camera native aspect (1920x1080 = 16:9). Used to
+    // crop it vertically into the dashcam top band without stretch.
+    private static final float WINDSHIELD_SOURCE_ASPECT = 1.7777778f;
     
     // Fullscreen quad vertices (NDC coordinates)
     private static final float[] VERTEX_COORDS = {
@@ -419,9 +430,15 @@ public class GpuMosaicRecorder {
      */
     public GpuMosaicRecorder(float[] quadrantStripOffsetX, int viewportWidth, int viewportHeight) {
         this.quadrantStripOffsetX = normalizeOffsets(quadrantStripOffsetX);
-        this.fragmentShader = buildFragmentShader(this.quadrantStripOffsetX);
         this.viewportWidth = viewportWidth > 0 ? viewportWidth : DEFAULT_VIEWPORT_WIDTH;
         this.viewportHeight = viewportHeight > 0 ? viewportHeight : DEFAULT_VIEWPORT_HEIGHT;
+        // Windshield top-band crop: the dedicated windshield camera is 16:9;
+        // the dashcam top band is full-width × DASHCAM_SPLIT of the encoder
+        // output. Crop it vertically so it fills the band without stretch.
+        float topBandAspect =
+            ((float) this.viewportWidth / (float) this.viewportHeight) / DASHCAM_SPLIT;
+        float cropY = windshieldCropY(WINDSHIELD_SOURCE_ASPECT, topBandAspect);
+        this.fragmentShader = buildFragmentShader(this.quadrantStripOffsetX, cropY);
     }
 
     /**
@@ -558,6 +575,8 @@ public class GpuMosaicRecorder {
         uRectifyK2Location = GLES20.glGetUniformLocation(programId, "uRectifyK2");
         uRectifyAspectLocation = GLES20.glGetUniformLocation(programId, "uRectifyAspect");
         uRecordLayoutLocation = GLES20.glGetUniformLocation(programId, "uRecordLayout");
+        uWindshieldTexLocation = GLES20.glGetUniformLocation(programId, "uWindshieldTex");
+        uWindshieldReadyLocation = GLES20.glGetUniformLocation(programId, "uWindshieldReady");
         // Force both deferred uniforms to be re-pushed on the first frame of
         // this (possibly reinitialized) program object.
         apaModeUniformDirty.set(true);
@@ -656,6 +675,18 @@ public class GpuMosaicRecorder {
      *                         camera cadence — no smoothing, no EMA, no clamps.
      */
     public void drawFrame(int cameraTextureId, long frameTimestampNs) {
+        drawFrame(cameraTextureId, 0, false, frameTimestampNs);
+    }
+
+    /**
+     * Render one mosaic frame, optionally compositing a dedicated windshield
+     * camera into the dashcam top band. [windshieldTextureId] is an external
+     * OES texture owned by the caller (PanoramicCameraGpu); it is sampled only
+     * when [windshieldReady] AND the dashcam layout is active — in every other
+     * case the 360 source is used and the windshield texture is ignored.
+     */
+    public void drawFrame(int cameraTextureId, int windshieldTextureId,
+                          boolean windshieldReady, long frameTimestampNs) {
         // Check if initialized
         if (eglCore == null || encoderSurface == null) {
             // Not initialized yet - skip silently
@@ -709,6 +740,20 @@ public class GpuMosaicRecorder {
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, cameraTextureId);
         GLES20.glUniform1i(uCameraTexLocation, 0);
+        // Bind the optional windshield texture to unit 2 (dashcam top band).
+        // Fall back to the camera texture when no windshield frame is ready so
+        // the external sampler always has a valid binding; the shader gates
+        // actual use on uWindshieldReady.
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE2);
+        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES,
+            (windshieldReady && windshieldTextureId != 0) ? windshieldTextureId : cameraTextureId);
+        if (uWindshieldTexLocation >= 0) {
+            GLES20.glUniform1i(uWindshieldTexLocation, 2);
+        }
+        if (uWindshieldReadyLocation >= 0) {
+            GLES20.glUniform1f(uWindshieldReadyLocation,
+                (windshieldReady && windshieldTextureId != 0) ? 1.0f : 0.0f);
+        }
         // uApaMode uniform: rewrite only on layout change. Per GLES2 spec
         // uniform values are part of the program object and persist across
         // glUseProgram of the same program. setCameraLayout sets the dirty
@@ -721,6 +766,14 @@ public class GpuMosaicRecorder {
         // racer published before flipping the dirty bit.
         if (apaModeUniformDirty.compareAndSet(true, false)) {
             GLES20.glUniform1f(uApaModeLocation, (float) cameraLayout);
+        }
+        // Recording composition layout (0 = standard 2x2 mosaic, 1 = dashcam).
+        // Deferred from setRecordingLayout() on another thread and consumed
+        // here on the encoder GL thread — same dirty-bit discipline as uApaMode.
+        if (recordLayoutUniformDirty.compareAndSet(true, false)) {
+            if (uRecordLayoutLocation >= 0) {
+                GLES20.glUniform1f(uRecordLayoutLocation, (float) recordLayout);
+            }
         }
 
         // SurfaceTexture transform matrix. Published per-frame from
@@ -1264,6 +1317,22 @@ public class GpuMosaicRecorder {
     }
 
     /**
+     * Select the recording composition layout for the 4-camera 360 source.
+     * 0 = standard 2x2 mosaic (default). 1 = dashcam: the 360 front-camera
+     * slice fills the top band, with the 360 left/rear/right slices tiled
+     * across the bottom band. Only the 4-camera 360 path honours this — the
+     * APA / 3-camera / DiLink4 shader branches take precedence. The actual
+     * glUniform1f is deferred to the next drawFrame on the encoder GL thread
+     * (we don't own that context here), matching the uApaMode pattern.
+     */
+    public void setRecordingLayout(int layout) {
+        int v = (layout == 1) ? 1 : 0;
+        if (v == this.recordLayout) return;
+        this.recordLayout = v;
+        this.recordLayoutUniformDirty.set(true);
+    }
+
+    /**
      * Wires the HAL-contention probe used by the safety valve. The valve only
      * skips frames when this returns true (i.e., the BYD native AVM app is
      * actively sharing the camera and could lose its preview signal). When
@@ -1651,7 +1720,7 @@ public class GpuMosaicRecorder {
      * → {TL, TR, BL, BR}. 3-cam (uApaMode > 1.5) and APA (uApaMode > 0.5)
      * branches are layout-independent and stay as-is.
      */
-    private static String buildFragmentShader(float[] offsets) {
+    private static String buildFragmentShader(float[] offsets, float windshieldCropY) {
         // uApaMode branches:
         //   0.0  4-camera mosaic: sample 4 quadrants of a 5120x960 horizontal
         //        strip and rearrange into 2x2 corners (legacy Seal layout).
@@ -1669,6 +1738,8 @@ public class GpuMosaicRecorder {
             "#extension GL_OES_EGL_image_external : require\n" +
             "precision mediump float;\n" +
             "uniform samplerExternalOES uCameraTex;\n" +
+            "uniform samplerExternalOES uWindshieldTex;\n" +
+            "uniform float uWindshieldReady;\n" +
             "uniform float uApaMode;\n" +
             "uniform vec2 uProducerForFront;\n" +
             "uniform vec2 uProducerForRight;\n" +
@@ -1762,6 +1833,43 @@ public class GpuMosaicRecorder {
             "        }\n" +
             "    } else if (uApaMode > 0.5) {\n" +
             "        samplePos = vTexCoord;\n" +
+            "    } else if (uRecordLayout > 0.5) {\n" +
+            // Dashcam composition (4-camera 360 source only). The 360 front
+            // slice fills the top `split` band at full width; the 360
+            // left / rear / right slices tile the bottom band in thirds.
+            // Reuses the same per-camera 0.25-wide producer columns as the
+            // standard 2x2 branch (frontOffset / leftOffset / rearOffset /
+            // rightOffset), just rearranged. Direct sampling: the optional
+            // rectify dewarp is intentionally NOT applied to dashcam slices
+            // in this pass (it is off by default; a follow-up can factor the
+            // dewarp block into a shared helper and apply it here too).
+            // Windshield-camera compositing for the top band is also a
+            // follow-up — this uses the 360 front slice, the documented
+            // graceful fallback.
+            "        float split = 0.70;\n" +
+            "        if (vTexCoord.y < split) {\n" +
+            "            float ly = vTexCoord.y / split;\n" +
+            // Optional dedicated windshield camera for the top band. When a
+            // windshield frame is bound (uWindshieldReady), sample it directly
+            // (vertically cropped to the band aspect via cropY) and skip the
+            // 360 front slice. Otherwise fall through to the 360 front slice.
+            "            if (uWindshieldReady > 0.5) {\n" +
+            "                float cropY = %.5ff;\n" +
+            "                vec2 wuv = vec2(vTexCoord.x, cropY + ly * (1.0 - cropY * 2.0));\n" +
+            "                gl_FragColor = texture2D(uWindshieldTex, wuv);\n" +
+            "                return;\n" +
+            "            }\n" +
+            "            samplePos = vec2(frontOffset + vTexCoord.x * 0.25, ly);\n" +
+            "        } else {\n" +
+            "            float by = (vTexCoord.y - split) / (1.0 - split);\n" +
+            "            float bx = vTexCoord.x * 3.0;\n" +
+            "            float cell = floor(bx);\n" +
+            "            float lx = bx - cell;\n" +
+            "            float off = leftOffset;\n" +
+            "            if (cell > 1.5) off = rightOffset;\n" +
+            "            else if (cell > 0.5) off = rearOffset;\n" +
+            "            samplePos = vec2(off + lx * 0.25, by);\n" +
+            "        }\n" +
             "    } else {\n" +
             "        vec2 gridPos = step(0.5, vTexCoord);\n" +
             "        float stripOffsetX;\n" +
@@ -1836,6 +1944,21 @@ public class GpuMosaicRecorder {
             com.overdrive.app.camera.GlUtil.RED_MASK_GLSL +
             "    gl_FragColor = src;\n" +
             "}\n",
-            offsets[0], offsets[1], offsets[2], offsets[3]);
+            offsets[0], offsets[1], offsets[2], offsets[3], windshieldCropY);
+    }
+
+    /**
+     * Vertical crop (0..0.45) to fit a {@code sourceAspect} (w/h) image into a
+     * band of {@code topBandAspect} without horizontal stretch. When the band
+     * is wider than the source we crop top + bottom symmetrically; when it
+     * isn't, no crop (0). Used to fit the 16:9 windshield camera into the
+     * dashcam top band.
+     */
+    private static float windshieldCropY(float sourceAspect, float topBandAspect) {
+        if (sourceAspect <= 0.0f || topBandAspect <= 0.0f || topBandAspect <= sourceAspect) {
+            return 0.0f;
+        }
+        float visibleHeight = sourceAspect / topBandAspect;
+        return Math.max(0.0f, Math.min(0.45f, (1.0f - visibleHeight) * 0.5f));
     }
 }

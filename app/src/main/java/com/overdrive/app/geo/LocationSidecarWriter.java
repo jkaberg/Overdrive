@@ -111,21 +111,41 @@ public final class LocationSidecarWriter {
                 effectiveStart = freshFallbackOrNull();
             }
 
-            // Feature gated AT THIS POINT: when the per-flow toggle is
-            // off the resolver short-circuits its own work, but the
-            // sidecar itself would still get written with empty geo.
-            // Skip it entirely so disabled-flow recordings stay
-            // identical to the pre-feature on-disk shape.
-            if (!isGeocodingEnabledForFlow(flow)) return;
+            // Composition layout (standard | dashcam), read at finalize —
+            // a good proxy for the layout the clip was recorded under (the
+            // setting is sticky). The video player reads this to pick the
+            // per-camera zoom regions. Only stamped when non-default so
+            // standard clips keep their exact pre-feature on-disk shape.
+            String layout = readRecordingLayout();
+            boolean dashcam = "dashcam".equals(layout);
 
-            // No GPS fix at all → skip. Writing a sidecar with an empty
-            // geo block produces UI noise (the row would render but
-            // contain nothing useful) and an empty SRT.
-            if (effectiveStart == null || !effectiveStart.hasFix()) return;
+            // Geo is writable only when the per-flow toggle is on AND we have
+            // a usable fix. When it isn't, we used to skip the sidecar
+            // entirely — but a dashcam clip still needs its layout stamped so
+            // per-camera zoom works without geocoding. Standard clips with no
+            // geo write nothing (identical to the pre-feature shape).
+            boolean geoOk = isGeocodingEnabledForFlow(flow)
+                    && effectiveStart != null && effectiveStart.hasFix();
+            if (!geoOk) {
+                if (dashcam) {
+                    JSONObject layoutOnly = new JSONObject();
+                    layoutOnly.put("version", 3);
+                    layoutOnly.put("layout", layout);
+                    writeJsonAtomic(mp4File, layoutOnly);
+                    try {
+                        com.overdrive.app.server.RecordingsIndex.getInstance().upsert(mp4File);
+                    } catch (Throwable t) {
+                        logger.warn("Index upsert after layout sidecar write failed for "
+                                + mp4File.getName() + ": " + t.getMessage());
+                    }
+                }
+                return;
+            }
 
             // ---- JSON sidecar (v3-compatible subset) ----
             JSONObject root = new JSONObject();
             root.put("version", 3);
+            if (dashcam) root.put("layout", layout);
             // durationMs unknown to this writer — the recorder owns it.
             // Readers tolerate absence; if a sentry reader tries
             // durationMs/0 they'll just get the default.
@@ -185,6 +205,24 @@ public final class LocationSidecarWriter {
                     .isGeocodingEnabledForFlow(flow == null ? "recording" : flow);
         } catch (Throwable t) {
             return false;
+        }
+    }
+
+    /**
+     * Current recording composition layout from unified config
+     * ({@code recording.recordingLayout}). "dashcam" or "standard"
+     * (default). Read at sidecar-write time as a proxy for the layout the
+     * clip was recorded under — the setting is sticky, so finalize-time is a
+     * close-enough approximation without threading the value through the
+     * recorder.
+     */
+    private static String readRecordingLayout() {
+        try {
+            String v = com.overdrive.app.config.UnifiedConfigManager
+                    .getRecording().optString("recordingLayout", "standard");
+            return "dashcam".equals(v) ? "dashcam" : "standard";
+        } catch (Throwable t) {
+            return "standard";
         }
     }
 

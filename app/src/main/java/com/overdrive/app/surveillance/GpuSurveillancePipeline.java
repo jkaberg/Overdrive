@@ -1325,6 +1325,8 @@ public class GpuSurveillancePipeline {
         }
         // Apply persisted overlay enabled state to new recorder
         recorder.setOverlayEnabled(overlayEnabledConfig);
+        // Apply persisted recording composition layout (standard / dashcam).
+        recorder.setRecordingLayout(recordingLayoutConfig);
 
         // 3. Create GPU downscaler with profile-driven offsets
         downscaler = new GpuDownscaler(quadrantStripOffsetX);
@@ -1384,6 +1386,8 @@ public class GpuSurveillancePipeline {
         camera = new PanoramicCameraGpu(cameraWidth, cameraHeight,
             quadrantStripOffsetX, quadrantCornerOffsetsXY);
         camera.setConsumers(recorder, downscaler, sentry);
+        // Apply persisted dashcam windshield-source preference to the new camera.
+        applyWindshieldToCamera();
 
         // Camera FPS config — must match the encoder FPS used above (loadTargetFps())
         // so that camera frame delivery rate matches the encoder's KEY_FRAME_RATE.
@@ -3878,6 +3882,56 @@ public class GpuSurveillancePipeline {
      * state keeps every start/stop pair balanced regardless of mode.
      */
     private boolean overlayPollingHeld = false;
+
+    /**
+     * Select the recording composition layout (0 = standard 360 mosaic,
+     * 1 = dashcam: 360 front slice on top, 360 left/rear/right below).
+     * Persisted in recording.recordingLayout; hot-applied to the live
+     * recorder and re-applied to recorders created later. Called from the
+     * daemon at startup and from the settings API on change.
+     */
+    public void setRecordingLayout(int layout) {
+        this.recordingLayoutConfig = (layout == 1) ? 1 : 0;
+        if (recorder != null) {
+            recorder.setRecordingLayout(this.recordingLayoutConfig);
+        }
+    }
+
+    /**
+     * Record the user's preference for sourcing the dashcam top band from a
+     * dedicated windshield camera. The windshield is captured by
+     * PanoramicCameraGpu but not yet composited into the recorder, so the
+     * dashcam layout currently uses the 360 front-camera slice (the
+     * documented graceful fallback). Storing the flag keeps the setting
+     * persisted and the API/daemon callers resolved; compositing is a
+     * follow-up.
+     */
+    public void setDashcamUseWindshield(boolean useWindshield) {
+        this.dashcamUseWindshieldConfig = useWindshield;
+        applyWindshieldToCamera();
+    }
+
+    /**
+     * Push the windshield-source preference to the producer: resolve the
+     * windshield camera id for this vehicle and enable/disable the dedicated
+     * windshield capture accordingly. No-op until the camera exists (reapplied
+     * on camera creation). PanoramicCameraGpu opens/closes the camera on its GL
+     * thread and falls back to the 360 front slice if it can't open it.
+     */
+    private void applyWindshieldToCamera() {
+        PanoramicCameraGpu cam = this.camera;
+        if (cam == null) return;
+        int windshieldCameraId = -1;
+        try {
+            windshieldCameraId = com.overdrive.app.camera.CameraConfigResolver
+                .resolve(getVehicleModel())
+                .getDirectCameraIdForRole(com.overdrive.app.camera.CameraRole.WINDSHIELD);
+        } catch (Throwable t) {
+            windshieldCameraId = -1;
+        }
+        cam.setDashcamWindshieldCamera(
+            dashcamUseWindshieldConfig && windshieldCameraId >= 0, windshieldCameraId);
+    }
 
     /**
      * Enables or disables the telemetry overlay.

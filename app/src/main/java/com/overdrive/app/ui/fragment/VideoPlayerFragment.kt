@@ -649,6 +649,11 @@ class VideoPlayerFragment : Fragment() {
                 val jsonFile = File(jsonPath)
                 if (!jsonFile.exists()) {
                     activity?.runOnUiThread {
+                        // No sidecar → standard 2x2 composition. Resetting
+                        // here (not just defaulting) matters for playlists:
+                        // a dashcam clip followed by a sidecar-less standard
+                        // clip must drop back to the 2x2 zoom regions.
+                        videoView.setLayout(ZoomableVideoView.Layout.STANDARD)
                         eventTimeline.setEvents(emptyList(), 0L)
                         tvEventInfo.text = getString(R.string.video_player_no_events)
                     }
@@ -656,8 +661,21 @@ class VideoPlayerFragment : Fragment() {
                 }
 
                 val json = JSONObject(jsonFile.readText())
+                // Composition layout drives the per-camera zoom regions. A
+                // dashcam clip's sidecar may carry ONLY this field (no events),
+                // so read + apply it BEFORE the events null-check below.
+                val clipLayout = if ("dashcam" == json.optString("layout", "standard"))
+                    ZoomableVideoView.Layout.DASHCAM else ZoomableVideoView.Layout.STANDARD
+                activity?.runOnUiThread { videoView.setLayout(clipLayout) }
                 val durationMs = json.optLong("durationMs", 0)
-                val eventsArray = json.optJSONArray("events") ?: return@Thread
+                val eventsArray = json.optJSONArray("events")
+                if (eventsArray == null) {
+                    activity?.runOnUiThread {
+                        eventTimeline.setEvents(emptyList(), durationMs)
+                        tvEventInfo.text = getString(R.string.video_player_no_events)
+                    }
+                    return@Thread
+                }
                 val stats = json.optJSONObject("stats")
 
                 val events = mutableListOf<EventTimelineView.TimelineEvent>()

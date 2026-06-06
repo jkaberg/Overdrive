@@ -1352,6 +1352,17 @@
         .video-player.zoom-rear  video { transform-origin: 0% 100%; transform: scale(2); }
         .video-player.zoom-left  video { transform-origin: 100% 100%; transform: scale(2); }
 
+        /* Dashcam composition: front fills the top 70% band (full width);
+           left/rear/right tile the bottom 30% band in thirds. Three classes
+           → more specific than the standard .zoom-* rules above, so these win
+           when the wrap also carries the `dashcam` class (set per clip in
+           events.js from the sidecar `layout`). Mirrors the native
+           ZoomableVideoView.regionFor() rects. zoom-all stays identity. */
+        .video-player.dashcam.zoom-front video { transform-origin: 50% 0%;    transform: scaleY(1.42857); }
+        .video-player.dashcam.zoom-left  video { transform-origin: 0% 100%;   transform: scale(3, 3.33333); }
+        .video-player.dashcam.zoom-rear  video { transform-origin: 50% 100%;  transform: scale(3, 3.33333); }
+        .video-player.dashcam.zoom-right video { transform-origin: 100% 100%; transform: scale(3, 3.33333); }
+
         /* Quadrant pill — floats over the video, top-right corner. Mirrors
            the native player's selector chrome so the surfaces feel uniform.
            Auto-hides with the rest of the controls when the user is just

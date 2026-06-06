@@ -65,6 +65,11 @@ BYD.events = {
     // UPPERCASE for Kotlin idiom + SharedPreferences storage. The two
     // surfaces don't share storage, so this is a local convention only.
     _quadrant: 'all',
+    // Composition layout of the currently-open clip ('standard' | 'dashcam'),
+    // read from the sidecar in loadTimeline. Drives the double-tap hit-test
+    // (_quadrantAtFit) and the `dashcam` CSS class on the wrap (which selects
+    // the dashcam zoom rects). Mirrors ZoomableVideoView.Layout on native.
+    _layout: 'standard',
     _quadrantWired: false,
     _QUADRANT_LS_KEY: 'byd.events.quadrant',
     _QUADRANT_VALID: ['all', 'front', 'right', 'rear', 'left'],
@@ -239,9 +244,7 @@ BYD.events = {
                             const lx = upX - rect.left;
                             const ly = upY - rect.top;
                             if (!(lx < dx || lx > dx + dw || ly < dy || ly > dy + dh)) {
-                                const left = lx < dx + dw / 2;
-                                const top = ly < dy + dh / 2;
-                                self.setQuadrant(top ? (left ? 'front' : 'right') : (left ? 'rear' : 'left'));
+                                self.setQuadrant(self._quadrantAtFit(lx - dx, ly - dy, dw, dh));
                             }
                         }
                     }
@@ -277,6 +280,26 @@ BYD.events = {
         }
 
         this._quadrantWired = true;
+    },
+
+    /**
+     * Map a point inside the fitted video rect [0..dw, 0..dh] to a camera,
+     * honouring the active composition [_layout]. STANDARD = a 2x2 halves
+     * split; DASHCAM = the top 70% band → front, the bottom band split into
+     * left/middle/right thirds → left/rear/right. Mirrors
+     * ZoomableVideoView.quadrantAtPoint on the native side.
+     */
+    _quadrantAtFit(fx, fy, dw, dh) {
+        if (this._layout === 'dashcam') {
+            if (fy < 0.70 * dh) return 'front';
+            const t = dw > 0 ? fx / dw : 0;
+            if (t < 1 / 3) return 'left';
+            if (t < 2 / 3) return 'rear';
+            return 'right';
+        }
+        const left = fx < dw / 2;
+        const top = fy < dh / 2;
+        return top ? (left ? 'front' : 'right') : (left ? 'rear' : 'left');
     },
 
     /**
@@ -1801,10 +1824,24 @@ BYD.events = {
         if (progress) progress.style.width = '0%';
         if (legend) legend.style.display = 'none';
         this._timelineEvents = null;
+        // Reset composition layout for the new clip (overridden below once the
+        // sidecar loads). Ensures a dashcam clip followed by a standard one
+        // drops back to the 2x2 zoom regions.
+        this._layout = 'standard';
+        var _wrapReset = document.getElementById('videoPlayerWrap');
+        if (_wrapReset) _wrapReset.classList.remove('dashcam');
 
         try {
             const res = await fetch('/api/events/' + filename);
             const data = await res.json();
+            // Composition layout drives the per-camera zoom regions: toggle the
+            // `dashcam` class so the dashcam CSS zoom rects apply, and store it
+            // for the double-tap hit-test (_quadrantAtFit).
+            if (data && data.layout === 'dashcam') {
+                this._layout = 'dashcam';
+                var _wrap = document.getElementById('videoPlayerWrap');
+                if (_wrap) _wrap.classList.add('dashcam');
+            }
 
             if (data && data.events && data.events.length > 0) {
                 this._timelineEvents = data;
