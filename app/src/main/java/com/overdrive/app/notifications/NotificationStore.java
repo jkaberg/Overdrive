@@ -107,6 +107,21 @@ public final class NotificationStore {
         return instance;
     }
 
+    /**
+     * The store only if it exists and has opened its database — never
+     * constructing one as a side effect of asking.
+     *
+     * <p>{@link #getInstance()} always hands back an object, so a caller that
+     * only wants to read (the Overlink event feed) cannot tell "log is running"
+     * from "log never started" without this. Returning null lets that caller
+     * answer 503 instead of silently serving an empty event list, which the
+     * phone would cache as "nothing happened".
+     */
+    public static NotificationStore getInstanceOrNull() {
+        NotificationStore s = instance;
+        return (s != null && s.isInitialized) ? s : null;
+    }
+
     // ==================== LIFECYCLE ====================
 
     public void init() {
@@ -388,6 +403,41 @@ public final class NotificationStore {
             }
         }
         return new Page(out, total);
+    }
+
+    /**
+     * Ascending-by-id page of rows newer than {@code sinceId} — the cursor read
+     * behind the Overlink event feed.
+     *
+     * <p>Deliberately ordered by {@code id} and not by {@code ts}: the caller
+     * keeps a cursor and asks for everything newer on foreground, so the ordering
+     * key has to be the same monotonic value it stores. Ordering by timestamp
+     * would silently skip a row inserted with an out-of-order clock, which is
+     * exactly the case a head unit with a drifting RTC produces.
+     *
+     * @param sinceId exclusive lower bound; 0 for "from the beginning"
+     */
+    public JSONArray listSince(long sinceId, int limit) {
+        JSONArray out = new JSONArray();
+        if (limit < 1) limit = 1;
+        if (limit > MAX_PAGE_SIZE) limit = MAX_PAGE_SIZE;
+        synchronized (lock) {
+            if (!isInitialized || connection == null) return out;
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "SELECT " + COLS + " FROM " + TABLE
+                            + " WHERE id > ? ORDER BY id ASC LIMIT ?;")) {
+                ps.setLong(1, sinceId);
+                ps.setInt(2, limit);
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) out.put(rowToJson(rs));
+                }
+            } catch (Exception e) {
+                logger.error("NotificationStore.listSince failed: " + e.getMessage(), e);
+                reconnect();
+                return new JSONArray();
+            }
+        }
+        return out;
     }
 
     private JSONObject rowToJson(ResultSet rs) throws Exception {

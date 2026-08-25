@@ -29,6 +29,8 @@ import java.util.Set;
  * - /login            - Login alias
  * - /shared/*         - Static assets (CSS, JS, fonts, models)
  * - /favicon.ico      - Browser favicon
+ * - /api/overlink/v1/pair/claim      - Overlink LAN pairing (single-use token)
+ * - /api/overlink/v1/devices/register - Overlink registration (JWT or single-use nonce)
  *
  * Notably NOT public anymore:
  * - /status           - leaks ACC/charging/recording state, requires auth
@@ -48,7 +50,19 @@ public class AuthMiddleware {
         // worker registration and manifest discovery, with no Bearer header
         // (browser-internal fetch, not auth.js-wrapped).
         "/manifest.json",
-        "/sw.js"
+        "/sw.js",
+        // Overlink companion-app pairing. Neither of these can rely on a JWT:
+        // the claim endpoint runs before the tunnel exists, and registration
+        // runs before the phone has a session whenever the car omits the
+        // device token from the pairing payload. Each carries its own
+        // single-use credential — a claim token and a pairing nonce — which
+        // OverlinkApiHandler checks, along with the source address. Everything
+        // else under /api/overlink/ stays behind normal auth.
+        //
+        // Note these cannot lean on the Tier-2 loopback net either: Overlink's
+        // traffic reaches the car over its tailnet interface, not 127.0.0.1.
+        "/api/overlink/v1/pair/claim",
+        "/api/overlink/v1/devices/register"
     ));
 
     // Path prefixes that don't require authentication

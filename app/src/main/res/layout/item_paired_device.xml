@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  One paired phone in Settings → Tailscale → Phone pairing.
+
+  The Revoke button is deliberately the ONLY destructive control here.
+  Revocation is one action covering both halves — the registry row and the
+  tailnet node — because registry-only revocation leaves a phone with working
+  tailnet access, and tailnet-only deletion leaves a stale row that silently
+  re-registers on the next pair. Never offer the two separately.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:gravity="center_vertical"
+    android:minHeight="64dp"
+    android:orientation="horizontal"
+    android:padding="@dimen/card_padding_standard">
+
+    <ImageView
+        android:id="@+id/ivDeviceIcon"
+        android:layout_width="@dimen/card_icon_standard"
+        android:layout_height="@dimen/card_icon_standard"
+        android:contentDescription="@null"
+        android:src="@drawable/ic_link"
+        app:tint="?attr/colorPrimary" />
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="14dp"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/tvDeviceLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textAppearance="@style/TextAppearance.Material3.TitleMedium"
+            android:textColor="?attr/colorOnSurface"
+            tools:text="Pixel 8 (Android 15)" />
+
+        <TextView
+            android:id="@+id/tvDeviceMeta"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:textAppearance="@style/TextAppearance.Material3.BodySmall"
+            android:textColor="?attr/colorOnSurfaceVariant"
+            tools:text="Last seen 2 hours ago · Overlink 0.1.0" />
+    </LinearLayout>
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/btnRevokeDevice"
+        style="@style/Widget.Material3.Button.TextButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/pairing_action_revoke"
+        android:textColor="?attr/colorError" />
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/btnForgetDevice"
+        style="@style/Widget.Material3.Button.TextButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/pairing_action_forget"
+        android:visibility="gone" />
+</LinearLayout>

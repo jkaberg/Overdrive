@@ -108,6 +108,18 @@
 
         </com.google.android.material.card.MaterialCardView>
 
+        <!-- Overlink companion-app pairing. Lives here rather than on its own
+             settings rail row because it is meaningless until the car has
+             joined a tailnet, and this is where that happens. -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnPhonePairing"
+            style="@style/Widget.Material3.Button.OutlinedButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="@string/pairing_menu_entry"
+            app:icon="@drawable/ic_vpn_lock" />
+
         <com.google.android.material.switchmaterial.SwitchMaterial
             android:id="@+id/switchTailscaleProxy"
             android:layout_width="match_parent"

@@ -757,7 +757,7 @@
     <!-- Dashboard -->
     <string name="toast_access_code_copied">Access code copied</string>
     <string name="dialog_regenerate_token_title">Regenerate Token</string>
-    <string name="dialog_regenerate_token_message">This will invalidate the current token. All active sessions will be logged out. Continue?</string>
+    <string name="dialog_regenerate_token_message">This will invalidate the current token. All active sessions will be logged out, including every phone paired with Overlink — each one will show OverDrive\'s login screen until you pair it again or enter the new token by hand. Continue?</string>
     <string name="toast_token_regenerated_logged_out">New token generated. All sessions logged out.</string>
     <string name="toast_token_regenerated_restart">Token regenerated. Daemon may need restart to apply.</string>
     <string name="toast_token_regenerated_no_notify">Token regenerated. Could not notify daemon.</string>
@@ -1751,5 +1751,76 @@
     <string name="network_warn_body">This head unit has one WiFi radio, so it cannot host a hotspot and stay on a WiFi network at the same time. While the hotspot is on, the car disconnects from WiFi and uses the built-in SIM\'s mobile data for itself and for every connected device. WiFi comes back when you turn the hotspot off.</string>
     <string name="network_warn_continue">Turn on hotspot</string>
     <string name="network_warn_cancel">Cancel</string>
+
+    <!-- ============================================================
+         Overlink phone pairing (Settings → Tailscale → Phone pairing)
+         ============================================================ -->
+    <string name="pairing_title">Phone pairing</string>
+    <string name="pairing_subtitle">Show a code on this screen and the Overlink app joins your tailnet and opens this dashboard. One scan, no typing.</string>
+    <string name="pairing_menu_entry">Phone pairing…</string>
+
+    <!-- Car identity -->
+    <string name="pairing_car_title">This car</string>
+    <string name="pairing_car_checking">Checking the tailnet…</string>
+    <string name="pairing_car_ready">On the tailnet as %1$s</string>
+    <string name="pairing_car_not_joined">This car has not joined a tailnet yet. Log in from Tailscale settings first.</string>
+    <string name="pairing_car_unreachable">Tailscale is not running on this car.</string>
+    <string name="pairing_car_identity_fmt">node %1$s\naddress %2$s</string>
+    <string name="pairing_car_untagged">This car\'s node has no tag, so it cannot be named as a destination in the grant below. Tag it in the Tailscale admin console — phones will pair but nothing will route until you do.</string>
+
+    <!-- Pair action -->
+    <string name="pairing_overline_pair">Pair a phone</string>
+    <string name="pairing_action_pair">Pair phone</string>
+    <string name="pairing_action_pair_again">Pair another phone</string>
+    <string name="pairing_progress">Minting a pairing key…</string>
+    <string name="pairing_qr_description">Pairing QR code</string>
+    <string name="pairing_qr_hint">Scan this with Overlink on your phone.</string>
+    <string name="pairing_countdown_fmt">Expires in %1$d:%2$02d</string>
+    <string name="pairing_expired">That code expired. Tap Pair phone for a new one.</string>
+    <string name="pairing_paired_fmt">Paired: %1$s</string>
+
+    <!-- Failure states — one message and one action per cause -->
+    <string name="pairing_error_action_setup">Set up the OAuth client</string>
+    <string name="pairing_error_action_grant">Show the grant</string>
+    <string name="pairing_error_action_tailscale">Open Tailscale settings</string>
+    <string name="pairing_error_action_retry">Try again</string>
+
+    <!-- Options -->
+    <string name="pairing_share_token_title">Sign this phone in automatically</string>
+    <string name="pairing_share_token_subtitle">Turn off if you would rather enter the device token on the phone yourself. With it off you will see OverDrive\'s login screen on the phone, once every 30 days.</string>
+    <string name="pairing_lan_title">Pair over the local network</string>
+    <string name="pairing_lan_subtitle">The code on screen carries only an address, and the phone fetches the key over Wi-Fi. Use this if you would rather the key never appear on screen at all.</string>
+
+    <!-- Setup -->
+    <string name="pairing_overline_setup">Tailscale OAuth client</string>
+    <string name="pairing_setup_body">Create an OAuth client in the Tailscale admin console with the devices:core write scope, and give it the phone tag below. OverDrive uses it to mint a single-use, five-minute pairing key each time you pair.</string>
+    <string name="pairing_client_id_hint">OAuth client ID</string>
+    <string name="pairing_client_secret_hint">OAuth client secret</string>
+    <string name="pairing_phone_tag_hint">Phone tag</string>
+    <string name="pairing_secret_storage_note">The secret is stored on this head unit and never leaves it — it is never shown in a pairing code and never written to a log. Leave the secret field blank to keep the one already stored.</string>
+    <string name="pairing_action_forget_client">Forget client</string>
+    <string name="pairing_forget_client_title">Forget the OAuth client?</string>
+    <string name="pairing_forget_client_message">No new phones can be paired until you enter a client again. Phones you have already paired keep their tailnet access — revoke them individually to cut it.</string>
+    <string name="pairing_saved">Pairing settings saved</string>
+    <string name="pairing_bad_tag">Tags look like tag:overdrive-phone — lowercase letters, digits and hyphens.</string>
+
+    <!-- ACL grant -->
+    <string name="pairing_grant_title">Tailnet policy</string>
+    <string name="pairing_grant_body">Paste this into your tailnet policy file. It is the real security boundary: phones get access to this car\'s dashboard port and nothing else — no exit node, no subnet routes, no other hosts.</string>
+    <string name="pairing_action_copy_grant">Copy policy</string>
+    <string name="pairing_grant_copied">Policy copied</string>
+
+    <!-- Paired devices -->
+    <string name="pairing_overline_devices">Paired phones</string>
+    <string name="pairing_no_devices">No phones paired yet.</string>
+    <string name="pairing_action_revoke">Revoke</string>
+    <string name="pairing_action_forget">Remove</string>
+    <string name="pairing_device_meta_fmt">Last seen %1$s · %2$s</string>
+    <string name="pairing_device_revoked">Revoked</string>
+    <string name="pairing_device_never_seen">never</string>
+    <string name="pairing_revoke_title">Revoke %1$s?</string>
+    <string name="pairing_revoke_message">This removes the phone from your tailnet and from this list, in one step. It loses access immediately and has to be paired again from scratch.</string>
+    <string name="pairing_revoked_fmt">%1$s revoked</string>
+    <string name="pairing_revoke_failed_fmt">Could not revoke: %1$s</string>
 
 </resources>

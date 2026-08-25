@@ -57,14 +57,18 @@ public class HttpResponse {
         byte[] body = json.getBytes("UTF-8");
         String reason;
         switch (status) {
+            case 201: reason = "Created"; break;
             case 400: reason = "Bad Request"; break;
             case 401: reason = "Unauthorized"; break;
             case 403: reason = "Forbidden"; break;
             case 404: reason = "Not Found"; break;
+            case 405: reason = "Method Not Allowed"; break;
             case 409: reason = "Conflict"; break;
             case 410: reason = "Gone"; break;
             case 429: reason = "Too Many Requests"; break;
             case 500: reason = "Internal Server Error"; break;
+            case 501: reason = "Not Implemented"; break;
+            case 502: reason = "Bad Gateway"; break;
             case 503: reason = "Service Unavailable"; break;
             default:  reason = "OK";
         }

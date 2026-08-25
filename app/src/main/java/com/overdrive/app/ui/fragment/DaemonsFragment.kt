@@ -26,6 +26,8 @@ import com.overdrive.app.R
 import com.overdrive.app.config.UnifiedConfigManager
 import com.overdrive.app.ui.model.DaemonStatus
 import com.overdrive.app.ui.util.QrCodeGenerator
+import androidx.navigation.fragment.findNavController
+import com.overdrive.app.ui.util.navigateDrillDown
 
 /**
  * Fragment for managing background daemons.
@@ -234,6 +236,9 @@ class DaemonsFragment : Fragment() {
             val proxySwitch = dialogView.findViewById<SwitchMaterial>(R.id.switchTailscaleProxy)
             val adbSwitch = dialogView.findViewById<SwitchMaterial>(R.id.switchTailscaleAdb)
             val adbEndpoint = dialogView.findViewById<TextView>(R.id.tailscaleAdbEndpoint)
+            val phonePairingBtn = dialogView.findViewById<com.google.android.material.button.MaterialButton>(
+                R.id.btnPhonePairing
+            )
 
             daemonsViewModel.tailscaleController.isProxyEnabled { isEnabled ->
                 activity?.runOnUiThread {
@@ -347,6 +352,15 @@ class DaemonsFragment : Fragment() {
                     confirmResetTailscaleEnvironment()
                 }
                 .create()
+
+            // Pairing needs the whole screen (a large QR, a countdown and the
+            // paired-device list), so it drills down rather than nesting inside
+            // this dialog. Dismiss first so the dialog isn't left behind the
+            // pushed fragment.
+            phonePairingBtn?.setOnClickListener {
+                dialog.dismiss()
+                findNavController().navigateDrillDown(R.id.phonePairingFragment)
+            }
 
             dialog.show()
         }

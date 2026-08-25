@@ -253,6 +253,15 @@
         android:label="@string/settings_section_security"
         tools:layout="@layout/fragment_settings_security" />
 
+    <!-- Phone pairing — the Overlink companion app. Reachable from the
+         Tailscale settings dialog on the Daemons page, because pairing only
+         makes sense once the car is on a tailnet. -->
+    <fragment
+        android:id="@+id/phonePairingFragment"
+        android:name="com.overdrive.app.ui.fragment.settings.PhonePairingFragment"
+        android:label="@string/pairing_title"
+        tools:layout="@layout/fragment_phone_pairing" />
+
     <!-- Native video player (entered from Recordings) -->
     <fragment
         android:id="@+id/videoPlayerFragment"

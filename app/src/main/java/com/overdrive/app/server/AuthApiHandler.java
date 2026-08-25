@@ -94,6 +94,28 @@ public class AuthApiHandler {
     }
 
     /**
+     * Share this limiter with other unauthenticated endpoints.
+     *
+     * <p>Used by {@link OverlinkApiHandler}'s local-network pairing claim, which
+     * is guarded only by a single-use token: a guessable token on an
+     * unauthenticated LAN endpoint deserves the same protection as the login
+     * endpoint. Callers must namespace their identity (e.g.
+     * {@code "overlink-claim:" + ip}) so they get their own bucket rather than
+     * sharing the login bucket for the same address — but they still inherit
+     * this map's opportunistic GC and its hard bucket cap.
+     *
+     * @return null if the request may proceed, an error string if rate limited.
+     */
+    public static String checkRateLimitFor(String identity) {
+        return checkRateLimit(identity != null && !identity.isEmpty() ? identity : "unknown");
+    }
+
+    /** Reset a shared-limiter bucket after a successful use. */
+    public static void clearRateLimitFor(String identity) {
+        clearRateLimit(identity);
+    }
+
+    /**
      * @return null if request may proceed, error string if rate limited.
      */
     private static String checkRateLimit(String identity) {

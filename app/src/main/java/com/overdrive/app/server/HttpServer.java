@@ -400,8 +400,18 @@ public class HttpServer {
             String path = parts[1];
             
             // Extend timeout for slow BYD cloud API calls (login + verify can take 10-15s)
-            if (path.startsWith("/api/bydcloud") || path.startsWith("/api/vehicle/lock") || 
+            if (path.startsWith("/api/bydcloud") || path.startsWith("/api/vehicle/lock") ||
                 path.startsWith("/api/vehicle/unlock") || path.startsWith("/api/vehicle/flash")) {
+                client.setSoTimeout(60000);
+            }
+
+            // Overlink pairing endpoints call api.tailscale.com while the request
+            // is open — minting a key on /pair/start, and looking the registering
+            // node up on /devices/register so the response can tell the phone
+            // whether it actually landed non-ephemeral and tagged. Over a car SIM
+            // that comfortably exceeds the default 15s socket window.
+            if (path.startsWith("/api/overlink/v1/pair/start")
+                    || path.startsWith("/api/overlink/v1/devices/register")) {
                 client.setSoTimeout(60000);
             }
             
@@ -479,6 +489,20 @@ public class HttpServer {
             // Check authentication for all other paths
             if (!AuthMiddleware.checkAuth(path, cookieHeader, authHeader, out,
                     client.getRemoteSocketAddress(), hasTunnelHeaders)) {
+                client.close();
+                return;
+            }
+
+            // Overlink companion-app API. Dispatched here rather than in
+            // routeToHandlers because it needs three things that layer doesn't
+            // carry: the client address (the LAN pairing claim must be served
+            // off-tailnet while registration and events must not be), and the
+            // cookie/authorization headers (registration accepts a session JWT
+            // *or* a single-use pairing nonce, and has to check the former
+            // itself because its path is public). See OverlinkApiHandler.
+            if (path.startsWith("/api/overlink/")) {
+                OverlinkApiHandler.handle(method, path, body, out,
+                        client.getRemoteSocketAddress(), cookieHeader, authHeader);
                 client.close();
                 return;
             }

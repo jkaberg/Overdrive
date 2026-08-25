@@ -50,6 +50,11 @@
     <!-- PIN unlock keypad (PinLockActivity). 72dp keys give a 14.4mm hit
          target on the BYD Seal 15.6" panel — well above Material's 48dp
          minimum and comfortable for cluster-distance interaction. -->
+    <!-- Overlink pairing QR. Sized as large as the card allows, because
+         pairing has to work on a real head unit, in sunlight, at arm's
+         length — legibility beats layout tidiness here. -->
+    <dimen name="pairing_qr_size">280dp</dimen>
+
     <dimen name="pin_key_size">72dp</dimen>
     <dimen name="pin_key_margin">6dp</dimen>
     <dimen name="pin_key_corner">36dp</dimen>
